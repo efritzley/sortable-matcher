@@ -1,17 +1,47 @@
-#!/usr/bin/python
-from __future__ import print_function
+#!/usr/bin/python3
 
 from collections import defaultdict
 from datetime import datetime
+import codecs
 import json
 import os
 import sys
 
 startTime = datetime.now()
 
-reload(sys)  
-sys.setdefaultencoding('utf8')
+# Class for a Product
+class Product( object ):
+    # using slots so we don't have to do a map lookup each time we access which will be often
+    __slots__ = [ 'manu', 'model', 'modelStripped', 'family', 'name', 'listings' ]
 
+    def __init__( self, line ):
+        product_dict        = json.loads( line.lower().rstrip('\n') ) 
+
+        self.name           = product_dict['product_name']
+        self.manu           = product_dict['manufacturer']
+        self.model          = product_dict['model']
+        self.family         = product_dict['family'] if 'family' in product_dict else None
+        self.modelStripped  = self.model.translate( { ord(c): None for c in '-_ ' } )
+        self.listings       = []
+
+    def prnt( self ):
+        print( self.manu, '...', self.family, '...', self.model )
+
+# Class for a Listing
+class Listing( object ):
+    __slots__ = [ 'manu', 'title', 'jsonText' ]
+
+    def __init__( self, line ):
+        listing_dict  = json.loads( line.lower().rstrip('\n') )
+
+        self.jsonText = line.rstrip('\n') # kept for easy output to file
+        self.manu     = listing_dict[u'manufacturer']
+        self.title    = listing_dict[u'title']
+
+    def prnt( self ):
+        print( self.title )
+
+# Pull the file paths from the command line or use default, ensure they exist
 productsFileName = str( sys.argv[1] ) if len( sys.argv ) > 1 else 'input/products.txt'
 if not os.path.isfile( productsFileName ):
     print( "products file does not exist" )
@@ -20,60 +50,30 @@ listingsFileName = str( sys.argv[2] ) if len( sys.argv ) > 2 else 'input/listing
 if not os.path.isfile( listingsFileName ):
     print( "listings file does not exist" )    
 
-class Product( object ):
-    __slots__ = [ 'manu', 'model', 'modelStripped', 'family', 'name', 'listings' ]
-
-    def __init__( self, line ):
-        product_dict        = json.loads( line.lower().rstrip('\n') )
-        self.name           = product_dict[u'product_name']
-        self.manu           = product_dict[u'manufacturer']
-        self.model          = product_dict[u'model']
-        self.family         = product_dict[u'family'] if u'family' in product_dict else None
-        self.modelStripped  = self.model.encode('ascii','ignore').translate( None, '-_ ' )
-        self.listings       = []
-
-    def prnt( self ):
-        print( self.manu, '...', self.family, '...', self.model )
-
-class Listing( object ):
-    __slots__ = [ 'manu', 'title', 'jsonText' ]
-
-    def __init__( self, line ):
-        self.jsonText = line.rstrip('\n')
-        listing_dict  = json.loads( line.lower().rstrip('\n') )
-        self.manu     = listing_dict[u'manufacturer']
-        self.title    = listing_dict[u'title']
-
-    def prnt( self ):
-        print( self.title )
-
-
+# Load from the products file
+# Create some structures to separate the products by manufacturer and family
 products = []
 products_by_manu = defaultdict( list )
 products_by_family = defaultdict( list )
-for line in open( productsFileName ):
+for line in open( productsFileName, encoding='utf-8' ):
     product = Product( line )
     products.append( product )
     products_by_manu[ product.manu ].append( product )
     if product.family is not None:
         products_by_family[ product.family ].append( product )
 
-listings = [ Listing( line ) for line in open( listingsFileName ) ]
-
-# for manu in products_by_manu.keys():
-#     print manu, len( products_by_manu_by_family[ manu ] ) 
-#     for family in products_by_manu_by_family[ manu ].keys():
-#         print manu, family
-
-# for p in products:
-#     print p.model;
+# Load from the listing file
+listings = [ Listing( line ) for line in open( listingsFileName, encoding='utf-8' ) ]
 
 def findProductByModel( l, productList, doPrint ):
     found = False
+
+    # searching the title for the model with '-_ ' stripped from it
     if not found:
-        titleStripped = l.title.encode( 'ascii', 'ignore' ).translate( None, '-_,;' )
+        titleStripped = l.title.translate( { ord(c): None for c in '-_,;' } )
         for product in productList:
-            if len( product.modelStripped ) > 1:
+            # exclude anything that is a single character, these will be caught below in the token-based search
+            if len( product.modelStripped ) > 1: 
                 findIndex = titleStripped.find( product.modelStripped )
                 if findIndex is not -1:
                     isDigits  = product.modelStripped.isdigit()
@@ -100,7 +100,7 @@ def findProductByModel( l, productList, doPrint ):
                             print()
                         break
     if not found:
-        title = l.title.encode( 'ascii', 'ignore' ).translate( None, ';,' )
+        title = l.title.translate( { ord(c): None for c in ';,' } ) 
         titleTokens = title.replace( '-', ' ' ).replace( '_', ' ' ).split()
         numTitleTokens = len( titleTokens )
         for product in productList:
@@ -123,89 +123,6 @@ def findProductByModel( l, productList, doPrint ):
                     break
             if found:
                 break
-
-
-    # if not found:
-    #     for product in productList:
-    #         findIndex = l.title.find( product.model )
-    #         if findIndex is not -1:
-    #             if len( l.title ) <= findIndex + len( product.model ) or \
-    #                not l.title[findIndex + len(product.model)].isnumeric():
-    #                 product.listings.append( l )
-    #                 product.prnt()
-    #                 l.prnt()
-    #                 print
-    #                 found = True
-    #                 break;
-    # if not found:
-    #     for product in productList:
-    #         if l.title.find( product.model ) is not -1:
-    #             product.listings.append( l )
-    #             product.prnt()
-    #             l.prnt()
-    #             print
-    #             found = True
-    #             break;
-    # if not found:
-    #     # TODO: can the above be reused?
-    #     titleStripped = l.title.encode('ascii','ignore').translate( None, '-_' )
-    #     for product in productList:
-    #         if titleStripped.find( product.modelStrippedL2 ) is not -1:
-    #             product.listings.append( l )
-    #             product.prnt()
-    #             l.prnt()
-    #             print
-    #             found = True
-    #             break
-    # if not found:
-    #     # TODO: can the above be reused?
-    #     titleTokens = l.title.encode('ascii','ignore').translate( None, '-_;' ).split()
-    #     numTitleTokens = len( titleTokens )
-    #     for product in productList:
-    #         if not found:
-    #             for i in range( 0, numTitleTokens - 1 ):
-    #                 word = titleTokens[i] + titleTokens[i+1]
-    #                 if word == product.modelStrippedL2:
-    #                     product.listings.append( l )
-    #                     # print "TWO WORD"
-    #                     # product.prnt()
-    #                     # l.prnt()
-    #                     # print
-    #                     found = True
-    #                     break
-    #                 if product.manu == 'sony' and \
-    #                    word[:-1] == product.modelStrippedL2 and \
-    #                    word[-1:].isalpha():
-    #                     product.listings.append( l )
-    #                     # print "TWO WORD"
-    #                     # product.prnt()
-    #                     # l.prnt()
-    #                     # print
-    #                     found = True
-    #                     break
-    #         if not found:
-    #             for i in range( 0, numTitleTokens - 2 ):
-    #                 word = titleTokens[i] + titleTokens[i+1] + titleTokens[i+2]
-    #                 if word == product.modelStrippedL2:
-    #                     product.listings.append( l )
-    #                     # print "THREE WORD"
-    #                     # product.prnt()
-    #                     # l.prnt()
-    #                     # print
-    #                     found = True
-    #                     break
-    # if not found:
-    #     # TODO: can the above be reused?
-    #     titleStripped = l.title.encode('ascii','ignore').translate( None, '-_ ' )
-    #     for product in productList:
-    #         if titleStripped.find( product.modelStrippedL2 ) is not -1:
-    #             product.listings.append( l )
-    #             # if product.manu == 'sony':
-    #             product.prnt()
-    #             l.prnt()
-    #             print
-    #             found = True
-    #             break
     return found
 
 count = 0
@@ -214,11 +131,6 @@ count3 = 0
 notFoundCount = 0
 notFoundCount2 = 0
 notFoundCount3 = 0
-
-# print 'Models'
-# for p in products:
-#     print p.model
-# print
 
 for l in listings:
     found = False
@@ -256,11 +168,11 @@ for l in listings:
                     notFoundCount3 +=1
                 break
     
-# for p in products:
-#     p.prnt()
-#     for l in p.listings:
-#         l.prnt()
-#     print()
+for p in products:
+    p.prnt()
+    for l in p.listings:
+        l.prnt()
+    print()
 
 outputDirectory = 'output'
 if not os.path.exists( outputDirectory ):
@@ -269,7 +181,7 @@ outputFile = outputDirectory + '/results.txt'
 if os.path.isfile( outputFile ):
     os.remove( outputFile )
 
-fh = open( outputFile, 'a')
+fh = codecs.open( outputFile, 'a', 'utf-8' )
 for p in products:
     listingsTextList = [ l.jsonText for l in p.listings ]
     listings = ', '.join( listingsTextList )
