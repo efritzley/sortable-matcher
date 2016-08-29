@@ -9,9 +9,11 @@ import sys
 
 startTime = datetime.now()
 
+
 KNOWN_DUPS = [ ( 't1i',   '500d' ), \
                ( 't2i',   '550d' ), \
                ( 'tl240', 'st5000' ) ]
+
 
 # Class for a Product
 class Product( object ):
@@ -48,7 +50,14 @@ class Listing( object ):
         print( self.title )
 
 
-def findProductByModelByLinearSearch( title, productList, doPrint, foundProducts ):
+def matchListingByProductModelByLinearSearch( title, productList, foundProducts ):
+    # We start by stripping the title of dashes, underscores, commas, and semicolons.
+    # We then do a normal linear search of the title for the stripped model 
+    # (dashes, underscores, and spaces removed ).
+    #
+    # If a match is found, some special logic specific to the camera use case is run
+    # to negate some matches
+
     # searching the title for the model with '-_ ' stripped from it
     titleStripped = title.translate( { ord(c): None for c in '-_,;' } )
     for product in productList:
@@ -80,18 +89,21 @@ def findProductByModelByLinearSearch( title, productList, doPrint, foundProducts
                 
                 if found:
                     foundProducts[product.name] = product
-                    if doPrint:
-                        product.prnt()
-                        print( title )
-                        print()
 
 
-def findProductByModelByTokenSearch( title, productList, replaceWithSpaces, doPrint, foundProducts ):
+def matchListingByProductModelByTokenSearch( title, productList, foundProducts ):
+    # We start this search by stripping the title of some symbols and
+    # replacing the _ and - chars with spaces and then breaking the title into tokens
+    #
+    # We run through the tokens building up n-grams up to size four.  We check for
+    # a match against stripped models (dash, underscore, and spaces removed)
+    #
+    # If a match is found, we run some special logic to negate the match in 
+    # specific cases
+
     titleForFamilySearch = title.translate( { ord(c): None for c in '-_,;' } )
     title = title.translate( { ord(c): None for c in ';,' } ) 
-    if replaceWithSpaces:
-        title = title.replace( '-', ' ' ).replace( '_', ' ' )
-    titleTokens = title.split()
+    titleTokens = title.replace( '-', ' ' ).replace( '_', ' ' ).split()
     numTitleTokens = len( titleTokens )
     for product in productList:
         found = False
@@ -114,10 +126,6 @@ def findProductByModelByTokenSearch( title, productList, replaceWithSpaces, doPr
                         else:
                             found = True
                             foundProducts[product.name] = product
-                            if doPrint:
-                                product.prnt()
-                                print( title )
-                                print()
                             break
             if found:
                 break 
@@ -156,28 +164,52 @@ def checkForKnownDuplicates( l, productOne, productTwo ):
     return False
 
 
+def removeTextInParentheses( title ):
+    start = title.find( '(' )
+    end   = title.find( ')' )
+    while start != -1 and end != -1:
+        title = title[:start] + title[end + 1:]
+        start = title.find( '(' )
+        end   = title.find( ')' )
+    return title
+
+
 def addOnlyProductToListingFromMap( l, foundProducts ):
     for _, product in foundProducts.items():
         product.listings.append( l )
 
 
-def findProductByModel( l, productList, doPrint ):
+def matchListingByProductModel( l, productList ):
+    # Now we search the listing for a product model.
+    # We do so in two different ways:
+    # 1. By a linear search (explained in above method)
+    # 2. Using token matching (explained in above method)
+    # 
+    # We keep a map of all matches.
+    # If there is only one match, we add the listing to the product.
+    # Otherwise, we scrub the list by:
+    # - removing text within parentheses and running the matching algorithm again
+    # - checking for the same model and just choosing one of them
+    # - checking the models to see if one is contained in the other and choosing the longer one
+    # - checking for known model number that identify the same camera and choosing one of them
+    #
+    # If there are still multiple entries, we don't match the listing to a product,
+    # as the listing is likely one for an accessory that supports multiple camera models
+
     foundProducts = {}
 
-    findProductByModelByLinearSearch( l.title, productList, doPrint, foundProducts )
-    findProductByModelByTokenSearch( l.title, productList, True, doPrint, foundProducts )    
+    matchListingByProductModelByLinearSearch( l.title, productList, foundProducts )
+    matchListingByProductModelByTokenSearch( l.title, productList, foundProducts )    
 
     if len( foundProducts ) == 1:
         addOnlyProductToListingFromMap( l, foundProducts )
     else:
-        start = l.title.find( '(' )
-        end   = l.title.find( ')' )
-        if start != -1 and end != -1:
-            strippedTitle = l.title[:start] + l.title[end + 1:]
+        strippedTitle = removeTextInParentheses( l.title )
+        if strippedTitle != l.title:
             products = [ product for _, product in foundProducts.items() ]
             foundProducts = {}
-            findProductByModelByLinearSearch( strippedTitle, productList, doPrint, foundProducts )
-            findProductByModelByTokenSearch( strippedTitle, productList, True, doPrint, foundProducts )    
+            matchListingByProductModelByLinearSearch( strippedTitle, productList, foundProducts )
+            matchListingByProductModelByTokenSearch( strippedTitle, productList, foundProducts )    
         if len( foundProducts ) == 1:
             addOnlyProductToListingFromMap( l, foundProducts )
         elif len( foundProducts ) > 2:
@@ -188,26 +220,36 @@ def findProductByModel( l, productList, doPrint ):
                checkForPartialModel( l, products[0], products[1] ) or \
                checkForKnownDuplicates( l, products[0], products[1] ):
                 pass # listing added to product in method
-            else: 
-                l.prnt()
-                products[0].prnt();
-                products[1].prnt();
-                print()
-                # foundProducts = {}
-                # findProductByModelByTokenSearch( l.title, products, False, doPrint, foundProducts )    
-                if len( foundProducts ) == 1:
-                    addOnlyProductToListingFromMap( l, foundProducts )
 
 
 def searchListingForProducts( l, productsByManu, productsByFamily ):
+    # We start by narrowing down the products we should be searching.
+    # There are three possibilities:
+    # 1. We find the product's manufacturer in the listing's manufacturer field
+    # 2. We find the product's manufacturer in the listing's title field
+    # 3. We find the product's family in the listing's title field
+    #
+    # Once we find a match, we search for the a product within a listing by product
+    # models
+    # 
+    # In case #2, we do not break early once we have found a match.  We check for 
+    # multiple manufacturers.  If we find more than one, we skip so as to avoid
+    # listings for accessories that support multiple products
+    #
+    # In case #3, we also do not break early but for a different reason.
+    # Some listings have multiple names for the same family.  In this case,
+    # we check all families present
+
     found = False
     if not found:
+        # 1
         for prod_manu in productsByManu.keys():
             if l.manu.find( prod_manu ) != -1:
                 found = True
-                findProductByModel( l, productsByManu[ prod_manu ], False )
+                matchListingByProductModel( l, productsByManu[ prod_manu ] )
                 break
     if not found:
+        # 2
         prod_manu_hit = None
         prod_manu_hit_count = 0
         for prod_manu in productsByManu.keys():    
@@ -215,22 +257,24 @@ def searchListingForProducts( l, productsByManu, productsByFamily ):
                 prod_manu_hit_count += 1
                 prod_manu_hit = prod_manu
                 if prod_manu_hit_count > 1:
-                    break
+                    break # short-circuit now since there is more than one
         if prod_manu_hit_count >= 1:
             found = True
         if prod_manu_hit_count == 1:
-            findProductByModel( l, productsByManu[ prod_manu_hit ], False )
+            matchListingByProductModel( l, productsByManu[ prod_manu_hit ] )
     if not found:
+        # 3
         productFound = False
         for prodFamily in productsByFamily.keys():
             if l.title.find( prodFamily ) != -1:
                 found = True
-                if findProductByModel( l, productsByFamily[ prodFamily ], False ):
+                if matchListingByProductModel( l, productsByFamily[ prodFamily ] ):
                     productFound = True
                     break
 
 
 ####### Starting the main script #######
+
 
 # Pull the file paths from the command line or use default, ensure they exist
 productsFileName = str( sys.argv[1] ) if len( sys.argv ) > 1 else 'input/products.txt'
@@ -301,11 +345,10 @@ outputFile = outputDirectory + '/results.txt'
 if os.path.isfile( outputFile ):
     os.remove( outputFile )
 
-fh = codecs.open( outputFile, 'a', 'utf-8' )
-for p in outputProducts:
-    listings = ', '.join( [ l.jsonText for l in p.listings ] )
-    fh.write( '{ "product_name": "' + p.name + '", "listings": [ ' + listings + ' ] }\n' )
-fh.close()
+with codecs.open( outputFile, 'a', 'utf-8' ) as f:
+    for p in outputProducts:
+        listings = ', '.join( [ l.jsonText for l in p.listings ] )
+        f.write( '{ "product_name": "' + p.name + '", "listings": [ ' + listings + ' ] }\n' )
 
 print( 'Time: ', datetime.now() - startTime )
 
